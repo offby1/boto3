@@ -10,6 +10,7 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
+import collections
 import logging
 
 
@@ -65,7 +66,8 @@ class TableResource(object):
 class BatchWriter(object):
     """Automatically handle batch writes to DynamoDB for a single table."""
     def __init__(self, table_name, client, flush_amount=25,
-                 overwrite_by_pkeys=None):
+                 overwrite_by_pkeys=None,
+                 ReturnConsumedCapacities=None):
         """
 
         :type table_name: str
@@ -98,6 +100,17 @@ class BatchWriter(object):
         self._items_buffer = []
         self._flush_amount = flush_amount
         self._overwrite_by_pkeys = overwrite_by_pkeys
+        self._accumulated_consumed_capacities = collections.defaultdict(int)
+        self._ReturnConsumedCapacities = ReturnConsumedCapacities
+
+    def _update_consumed_capacities(self,
+                                    ConsumedCapacityArray):
+        import pprint
+        for cca_dict in ConsumedCapacityArray:
+            TableName = cca_dict['TableName']
+            CapacityUnits = cca_dict['CapacityUnits']
+            self._accumulated_consumed_capacities[TableName] += CapacityUnits
+
 
     def put_item(self, Item):
         self._add_request_and_process({'PutRequest': {'Item': Item}})
@@ -135,8 +148,11 @@ class BatchWriter(object):
     def _flush(self):
         items_to_send = self._items_buffer[:self._flush_amount]
         self._items_buffer = self._items_buffer[self._flush_amount:]
-        response = self._client.batch_write_item(
-            RequestItems={self._table_name: items_to_send})
+        write_parameters=dict(RequestItems={self._table_name: items_to_send})
+        if self._ReturnConsumedCapacities:
+            write_parameters['ReturnConsumedCapacities'] = self._ReturnConsumedCapacities
+        response = self._client.batch_write_item(**write_parameters)
+        self._update_consumed_capacities(response.get('ConsumedCapacity', []))
         unprocessed_items = response['UnprocessedItems']
 
         if unprocessed_items and unprocessed_items[self._table_name]:

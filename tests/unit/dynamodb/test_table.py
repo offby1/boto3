@@ -21,7 +21,10 @@ class BaseTransformationTest(unittest.TestCase):
 
     def setUp(self):
         self.client = mock.Mock()
-        self.client.batch_write_item.return_value = {'UnprocessedItems': {}}
+        self.client.batch_write_item.return_value = {
+            'UnprocessedItems': {},
+            "ConsumedCapacity": [{"CapacityUnits": 5, "TableName": "wat"}],
+        }
         self.table_name = 'tablename'
         self.flush_amount = 2
         self.batch_writer = BatchWriter(self.table_name, self.client,
@@ -386,3 +389,21 @@ class BaseTransformationTest(unittest.TestCase):
             }
         }
         self.assert_batch_write_calls_are([first_batch, second_batch])
+
+    def test_consumed_capacity_accumulates(self):
+        with BatchWriter(self.table_name, self.client,
+                         flush_amount=2,
+                         ReturnConsumedCapacities='TOTAL') as b:
+            b.put_item(Item={'pkey': 'foo1'})
+
+        self.assertEqual(dict(b._accumulated_consumed_capacities),
+                         {'wat': 5})
+
+        with BatchWriter(self.table_name, self.client,
+                         flush_amount=2,
+                         ReturnConsumedCapacities='TOTAL') as b:
+            for _ in range(2 * self.flush_amount):
+                b.put_item(Item={'key': 'foo'})
+
+        self.assertEqual(dict(b._accumulated_consumed_capacities),
+                         {'wat': 2 * 5})
